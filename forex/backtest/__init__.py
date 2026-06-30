@@ -23,6 +23,11 @@ from forex.backtest.evaluation import (
     strategy_factory,
 )
 from forex.backtest.metrics import compute_metrics, periods_per_year
+from forex.backtest.portfolio import (
+    PortfolioBacktest,
+    portfolio_factory,
+    rank_weights,
+)
 from forex.backtest.statistics import (
     deflated_sharpe_ratio,
     expected_max_sharpe,
@@ -51,6 +56,10 @@ __all__ = [
     "StrategyBacktest",
     "expand_grid",
     "strategy_factory",
+    # cross-sectional portfolio engine
+    "PortfolioBacktest",
+    "portfolio_factory",
+    "rank_weights",
     # metrics
     "compute_metrics",
     "periods_per_year",

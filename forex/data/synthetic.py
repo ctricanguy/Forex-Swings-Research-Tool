@@ -8,6 +8,7 @@ path with a configurable trend and a realistic bid/ask spread, plus an optional
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -15,6 +16,11 @@ import numpy as np
 import pandas as pd
 
 from forex.data.base import DataProvider, validate_bars
+
+
+def _stable_int(text: str) -> int:
+    """Process-independent hash (Python's builtin ``hash`` is salted per run)."""
+    return int.from_bytes(hashlib.md5(text.encode("utf-8")).digest()[:4], "big")
 
 # Approximate bar spacing per OANDA-style granularity code.
 _GRANULARITY_DELTA = {
@@ -89,10 +95,15 @@ class SyntheticDataProvider(DataProvider):
         )
 
         # Seed deterministically per instrument so different pairs differ but
-        # are still reproducible run-to-run.
-        rng = np.random.default_rng(self.seed + (hash(instrument) % 10_000))
+        # are still reproducible run-to-run (and across processes).
+        inst_hash = _stable_int(instrument)
+        rng = np.random.default_rng(self.seed + inst_hash % 10_000)
+        # Distinct trend phase per instrument so a cross-sectional ranking has
+        # genuine dispersion (pairs trend at different times), not just noise.
+        phase = (inst_hash % 1000) / 1000.0 * 2 * np.pi
+        ramp = np.linspace(0, 3 * np.pi, n) + phase
         shocks = rng.normal(self.drift, self.vol, size=n)
-        trend = self.trend_strength * np.sin(np.linspace(0, 3 * np.pi, n))
+        trend = self.trend_strength * np.sin(ramp)
         log_path = np.cumsum(shocks) + trend
         close = self.start_price * np.exp(log_path)
 
@@ -123,9 +134,10 @@ class SyntheticDataProvider(DataProvider):
         )
 
         if self.with_rate_diff:
-            # Slow-moving rate differential in percent, sign correlated with the
-            # trend so carry and momentum partially agree (as in reality).
-            df["rate_diff"] = 1.5 * np.sin(np.linspace(0, 3 * np.pi, n)) + 0.5
+            # Slow-moving rate differential in percent, sharing the instrument's
+            # trend phase so carry and momentum partially agree (as in reality)
+            # while still differing across pairs.
+            df["rate_diff"] = 1.5 * np.sin(ramp) + 0.5
 
         # The most recent bar is the still-forming one unless told otherwise.
         if not complete_only and n > 0:

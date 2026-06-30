@@ -20,9 +20,11 @@ auto-trade.
 
 ```
 forex/
-├── data/            # canonical bar schema + providers (synthetic, OANDA) + SQLite store
+├── data/            # canonical bar schema + providers (synthetic, OANDA),
+│                    #   SQLite store, and Panel (multi-pair aligned universe)
 ├── strategies/      # THE SHARED LIBRARY: pure, point-in-time signal logic
-├── backtest/        # honest engine (one-bar shift, spread + swap costs) + metrics,
+│                    #   (per-pair strategies + cross-sectional factor signals)
+├── backtest/        # honest per-pair engine + cross-sectional PortfolioBacktest,
 │                    #   the Backtestable interface, and the validation harness
 │                    #   (walk-forward, holdout, PSR / deflated Sharpe)
 └── live/            # scheduled runner + notifiers (console, Telegram)
@@ -95,6 +97,8 @@ tokens never get committed.
 
 ## Built-in strategies
 
+**Per-pair** (`Strategy.generate_signals(data) -> position`, one instrument):
+
 | Strategy | Module | Notes |
 |---|---|---|
 | `TimeSeriesMomentum` | `forex/strategies/momentum.py` | Trend/momentum factor; sign of trailing return. |
@@ -102,10 +106,27 @@ tokens never get committed.
 | `Carry` | `forex/strategies/carry.py` | Interest-rate-differential factor (needs a `rate_diff` column). |
 | `Ensemble` | `forex/strategies/ensemble.py` | Diversified multi-factor sleeve (averages members). |
 
-Add your own by subclassing `forex.strategies.base.Strategy` and implementing
-`generate_signals`. The point-in-time test (`tests/test_no_lookahead.py`) and
-the backtest parity test apply to every strategy automatically once you add it
-to the parametrised lists.
+**Cross-sectional** (`CrossSectionalSignal.score(panel) -> wide scores`, ranked across pairs):
+
+| Signal | Module | Notes |
+|---|---|---|
+| `XSMomentum` | `forex/strategies/cross_sectional.py` | Rank pairs by trailing return; long top / short bottom. |
+| `XSCarry` | `forex/strategies/cross_sectional.py` | Rank pairs by rate differential (needs `rate_diff`). |
+
+Cross-sectional signals feed `PortfolioBacktest`, which builds a dollar-neutral
+long/short book (`rank_weights`) and is itself a `Backtestable` — so it validates
+through the exact same harness:
+
+```bash
+python scripts/run_portfolio.py --signal xsmom --train 250 --test 60
+python scripts/run_portfolio.py --signal xscarry
+```
+
+Add your own per-pair strategy by subclassing `forex.strategies.base.Strategy`,
+or a cross-sectional one by subclassing
+`forex.strategies.cross_sectional.CrossSectionalSignal`. The point-in-time and
+parity tests apply to every strategy automatically once you add it to the
+parametrised test lists.
 
 ## Validation discipline (don't skip this)
 
@@ -134,12 +155,12 @@ accounts lose money. Treat this project as a rigorous learning instrument first.
 
 ## Status
 
-Stage 0–2 of the roadmap in `docs/ARCHITECTURE.md`: the modular skeleton, a
-shared strategy library, an honest backtester, SQLite persistence, an OANDA
-provider, a live alert runner, and the **validation harness** (walk-forward,
-holdout, PSR / deflated Sharpe) behind the `Backtestable` interface — all tested.
-Next: a cross-sectional portfolio engine (`PortfolioBacktest`) that ranks pairs
-into long/short factor sleeves and plugs into the same harness, plus the value
-factor and a risk layer.
+Stage 0–3 of the roadmap in `docs/ARCHITECTURE.md`: the modular skeleton, a
+shared strategy library (per-pair **and** cross-sectional), an honest per-pair
+backtester and a cross-sectional `PortfolioBacktest`, SQLite persistence, an
+OANDA provider, a live alert runner, and the **validation harness** (walk-forward,
+holdout, PSR / deflated Sharpe) — all behind the single `Backtestable` interface,
+all tested. Next: the value factor (PPP / real-exchange-rate, needs FRED), a risk
+layer (position sizing + drawdown kill-switch), and wiring real OANDA data.
 
 [@BotFather]: https://t.me/BotFather

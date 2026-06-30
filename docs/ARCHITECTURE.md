@@ -14,10 +14,11 @@
 | One-bar execution shift (central, single place) | `forex/backtest/engine.py` (`position.shift(1)`) mirrored by `live/runner.py` |
 | Explicit spread + swap costs | `CostModel` in `forex/backtest/engine.py` |
 | Lookahead self-test | `detect_lookahead()` in `forex/backtest/engine.py`; `tests/test_no_lookahead.py` |
-| Unified evaluation interface (per-pair **and** cross-sectional) | `Backtestable` in `forex/backtest/evaluation.py` (`StrategyBacktest` now; `PortfolioBacktest` later) |
+| Unified evaluation interface (per-pair **and** cross-sectional) | `Backtestable` in `forex/backtest/evaluation.py` (`StrategyBacktest` + `PortfolioBacktest`) |
 | Walk-forward refit + untouched holdout | `walk_forward()`, `holdout_split()` in `forex/backtest/validation.py` |
 | Deflated / Probabilistic Sharpe Ratio | `forex/backtest/statistics.py` |
-| Carry / momentum / value / trend factors | `forex/strategies/{carry,momentum,ma_cross}.py`, combined in `ensemble.py` |
+| Cross-sectional factor premia (rank pairs, long/short) | `forex/strategies/cross_sectional.py` (signals) + `forex/backtest/portfolio.py` (`PortfolioBacktest`, `rank_weights`) over a `forex/data/panel.py` universe |
+| Per-pair carry / momentum / trend factors | `forex/strategies/{carry,momentum,ma_cross}.py`, combined in `ensemble.py` |
 | Point-in-time SQLite persistence | `forex/data/storage.py` |
 | OANDA v20 bid/ask candles | `forex/data/oanda.py` |
 | Telegram alerts + APScheduler on a Pi under systemd | `forex/live/`, `deploy/forex-bot.service` |

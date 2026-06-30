@@ -10,6 +10,7 @@ on a specific vendor.
 """
 
 from forex.data.base import BAR_COLUMNS, Bar, DataProvider, validate_bars
+from forex.data.panel import Panel
 from forex.data.synthetic import SyntheticDataProvider
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "Bar",
     "DataProvider",
     "validate_bars",
+    "Panel",
     "SyntheticDataProvider",
 ]
