@@ -22,7 +22,9 @@ auto-trade.
 forex/
 ├── data/            # canonical bar schema + providers (synthetic, OANDA) + SQLite store
 ├── strategies/      # THE SHARED LIBRARY: pure, point-in-time signal logic
-├── backtest/        # honest engine (one-bar shift, spread + swap costs) + metrics
+├── backtest/        # honest engine (one-bar shift, spread + swap costs) + metrics,
+│                    #   the Backtestable interface, and the validation harness
+│                    #   (walk-forward, holdout, PSR / deflated Sharpe)
 └── live/            # scheduled runner + notifiers (console, Telegram)
 scripts/             # run_backtest.py, run_live.py
 deploy/              # systemd unit for a Raspberry Pi
@@ -35,6 +37,12 @@ The **one-bar execution shift** (decide on bar *t*'s close, get filled on *t+1*)
 and **cost accounting** live in exactly one place — the engine — and the live
 runner mirrors the same convention. Strategies never reach into a broker SDK;
 they only see the canonical bar frame, so providers are swappable.
+
+The validation harness depends on one abstraction — `Backtestable`, which yields
+a **dated return/position stream over a window** (`run(start, end) -> BacktestResult`).
+A single-pair strategy is adapted via `StrategyBacktest`; the upcoming
+cross-sectional portfolio engine will implement the *same* interface, so it plugs
+into walk-forward / holdout with zero harness changes.
 
 ## Quickstart (no API keys needed)
 
@@ -101,23 +109,37 @@ to the parametrised lists.
 
 ## Validation discipline (don't skip this)
 
-A strategy should only "graduate" if it survives:
+A strategy should only "graduate" if it survives all four checks — and the harness
+implements them:
 
 1. **No lookahead** — `detect_lookahead()` returns `leaking_bars == 0`.
-2. **Honest costs** — spread (from bid/ask) and swap modelled explicitly.
-3. **Walk-forward / out-of-sample** — refit on a rolling window; keep a holdout
-   you never touch until the end.
-4. **Deflated Sharpe** — track how many configurations you tried; a high
-   backtest Sharpe is trivial to find by luck.
+2. **Honest costs** — spread (from bid/ask) and swap modelled explicitly in `CostModel`.
+3. **Walk-forward / out-of-sample** — `walk_forward()` refits the best config on a
+   rolling (or anchored) train window and stitches the out-of-sample test windows
+   into one honest return stream; `holdout_split()` keeps an untouched tail.
+4. **Deflated Sharpe** — `deflated_sharpe_ratio()` discounts the result by how many
+   configurations you tried; a high backtest Sharpe is trivial to find by luck.
+
+```bash
+# Walk-forward + holdout + PSR/deflated-Sharpe report (synthetic data)
+python scripts/run_validation.py --strategy tsmom --train 250 --test 60
+```
+
+The report ends in a blunt verdict (`PASS` / `WEAK` / `FAIL`). On the synthetic
+demo, momentum lands at `WEAK` (deflated Sharpe ~0.89) and the MA cross at `FAIL` —
+the kind of discrimination you want before risking anything.
 
 The base rate you are fighting: regulators report **~74–89%** of retail forex
 accounts lose money. Treat this project as a rigorous learning instrument first.
 
 ## Status
 
-Stage 0–1 of the roadmap in `docs/ARCHITECTURE.md`: the modular skeleton, a
+Stage 0–2 of the roadmap in `docs/ARCHITECTURE.md`: the modular skeleton, a
 shared strategy library, an honest backtester, SQLite persistence, an OANDA
-provider, and a live alert runner — all tested. Walk-forward / deflated-Sharpe
-validation and a richer factor sleeve are the next stages.
+provider, a live alert runner, and the **validation harness** (walk-forward,
+holdout, PSR / deflated Sharpe) behind the `Backtestable` interface — all tested.
+Next: a cross-sectional portfolio engine (`PortfolioBacktest`) that ranks pairs
+into long/short factor sleeves and plugs into the same harness, plus the value
+factor and a risk layer.
 
 [@BotFather]: https://t.me/BotFather
