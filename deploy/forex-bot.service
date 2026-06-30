@@ -1,0 +1,29 @@
+# systemd unit for the live signal runner on a Raspberry Pi (64-bit OS).
+#
+# Install:
+#   sudo cp deploy/forex-bot.service /etc/systemd/system/forex-bot.service
+#   # edit User/WorkingDirectory/paths below to match your install
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now forex-bot
+#   journalctl -u forex-bot -f        # follow logs
+#
+# systemd handles auto-restart on crash, restart on reboot, and logging via
+# journald -- the lowest-overhead "always on" approach on Raspberry Pi OS.
+
+[Unit]
+Description=Swing-Forex live signal runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Forex
+# Load secrets (OANDA_ACCESS_TOKEN, TELEGRAM_*, ...) from an env file.
+EnvironmentFile=/home/pi/Forex/.env
+ExecStart=/home/pi/Forex/.venv/bin/python scripts/run_live.py --schedule --config config/config.yaml
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

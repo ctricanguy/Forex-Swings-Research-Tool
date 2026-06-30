@@ -1,0 +1,31 @@
+# Copy to config/config.yaml and edit. Secrets should be left blank here and
+# supplied via environment variables (see .env.example) so they never hit git.
+
+# Which pairs to track and at what granularity.
+instruments:
+  - EUR_USD
+  - GBP_USD
+  - USD_JPY
+  - AUD_USD
+granularity: D            # OANDA code: D (daily), H4 (4-hour), etc.
+history_bars: 400         # how many completed bars to pull each cycle
+
+# Where the SQLite database lives.
+db_path: forex.db
+
+# Live poll schedule, as a 5-field cron string (UTC). Default: 00:05 daily,
+# shortly after the daily candle closes.
+schedule_cron: "5 0 * * *"
+
+# Data source: "synthetic" (no keys, for testing) or "oanda" (real data).
+data_source: synthetic
+
+# Secrets here are optional and overridden by env vars; keep them blank in git.
+oanda:
+  access_token:           # set via OANDA_ACCESS_TOKEN
+  account_id:             # set via OANDA_ACCOUNT_ID
+  environment: practice   # practice or live
+
+telegram:
+  bot_token:              # set via TELEGRAM_BOT_TOKEN
+  chat_id:                # set via TELEGRAM_CHAT_ID

@@ -1,0 +1,14 @@
+# Core runtime dependencies (needed to run backtests and the live runner).
+pandas>=2.0
+numpy>=1.24
+PyYAML>=6.0
+
+# Live data + scheduling. Required only for live OANDA polling, not for
+# synthetic backtests or the test suite.
+oandapyV20>=0.7.2
+APScheduler>=3.10
+
+# Telegram alerts use the standard library (urllib) by default, so no extra
+# dependency is required for one-way push alerts. Uncomment to build an
+# interactive command bot (/status, /signals, /backtest):
+# python-telegram-bot>=21.0

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swing-forex-tool"
+version = "0.1.0"
+description = "Modular swing-forex research and signal tool with a shared strategy library used by both the backtester and the live runner."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+live = ["oandapyV20>=0.7.2", "APScheduler>=3.10"]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools]
+packages = ["forex", "forex.data", "forex.strategies", "forex.backtest", "forex.live"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

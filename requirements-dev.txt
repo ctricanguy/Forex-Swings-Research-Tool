@@ -1,0 +1,11 @@
+-r requirements.txt
+
+# Test suite.
+pytest>=7.0
+
+# Research / validation extras (heavy; install as needed). On a Raspberry Pi,
+# prefer running large parameter sweeps on a laptop or in the cloud and deploy
+# only the lightweight live loop to the Pi.
+# vectorbt>=0.26          # fast vectorised parameter sweeps
+# backtesting.py>=0.3     # gentle on-ramp for prototyping single strategies
+# pandas-ta>=0.3          # indicators (prefer over TA-Lib on ARM/Pi)
