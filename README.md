@@ -125,7 +125,9 @@ tokens never get committed.
 | `XSCarry` | `forex/strategies/cross_sectional.py` | Rank pairs by rate differential (needs `rate_diff`). |
 
 | `XSValue` | `forex/strategies/cross_sectional.py` | Long-horizon reversal (PPP proxy); or a real-value field. |
-| `XSEnsemble` | `forex/strategies/cross_sectional.py` | Diversified sleeve: z-scored, weighted factor average. |
+| `XSEnsemble` | `forex/strategies/cross_sectional.py` | Diversified sleeve: z-scored, weighted factor average (`require_all=False` lets gated members abstain). |
+| `VolGate` | `forex/strategies/regimes.py` | Regime gate: signal active only in calm (or stressed) FX vol — carry's documented crash guard. |
+| `TrendGate` | `forex/strategies/regimes.py` | Regime gate: signal active per pair only when trending (Kaufman efficiency ratio) — momentum's chop guard. |
 
 Cross-sectional signals feed `PortfolioBacktest`, which builds a dollar-neutral
 long/short book (`rank_weights`), accrues **real per-pair swap financing** from

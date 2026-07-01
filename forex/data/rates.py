@@ -17,6 +17,7 @@ was publicly known before ``t``.
 
 from __future__ import annotations
 
+import time
 import urllib.request
 from typing import Callable, Dict, Optional
 
@@ -38,11 +39,36 @@ DEFAULT_SERIES: Dict[str, str] = {
 FetchFn = Callable[[str], str]
 
 
-def _http_fetch(series_id: str, timeout: float = 30.0) -> str:
-    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-    request = urllib.request.Request(url, headers={"User-Agent": "forex-tool/0.1"})
-    with urllib.request.urlopen(request, timeout=timeout) as resp:
-        return resp.read().decode("utf-8")
+def with_retries(fn: Callable, retries: int = 3, base_delay: float = 2.0) -> Callable:
+    """Wrap a callable with exponential-backoff retries (FRED can be slow)."""
+
+    def wrapped(*args):
+        for attempt in range(retries):
+            try:
+                return fn(*args)
+            except Exception:
+                if attempt == retries - 1:
+                    raise
+                time.sleep(base_delay * (2 ** attempt))
+
+    return wrapped
+
+
+def _http_fetch_factory(
+    timeout: float = 90.0, retries: int = 3, start: Optional[str] = None
+) -> FetchFn:
+    """Default HTTP layer: long timeout, retries, and an optional ``cosd`` start
+    date so we don't pull 70 years of history when bars begin in 2016."""
+
+    def fetch(series_id: str) -> str:
+        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+        if start:
+            url += f"&cosd={start}"
+        request = urllib.request.Request(url, headers={"User-Agent": "forex-tool/0.1"})
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            return resp.read().decode("utf-8")
+
+    return with_retries(fetch, retries=retries)
 
 
 def parse_fredgraph_csv(text: str) -> pd.Series:
@@ -73,9 +99,13 @@ class FredRates:
         series: Optional[Dict[str, str]] = None,
         fetch: Optional[FetchFn] = None,
         lag_bars: int = 1,
+        *,
+        start: Optional[str] = None,
+        timeout: float = 90.0,
+        retries: int = 3,
     ) -> None:
         self.series = {**DEFAULT_SERIES, **(series or {})}
-        self._fetch = fetch or _http_fetch
+        self._fetch = fetch or _http_fetch_factory(timeout, retries, start)
         self.lag_bars = lag_bars
         self._cache: Dict[str, pd.Series] = {}
 

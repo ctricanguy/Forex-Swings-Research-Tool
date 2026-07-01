@@ -57,9 +57,20 @@ def build_signal(spec: Dict) -> CrossSectionalSignal:
     kind = spec.get("type")
     if kind == "xs_ensemble":
         members = [build_signal(m) for m in spec["members"]]
-        return XSEnsemble(members, spec.get("weights"), name=spec.get("name", "xs_ensemble"))
+        return XSEnsemble(
+            members,
+            spec.get("weights"),
+            name=spec.get("name", "xs_ensemble"),
+            require_all=spec.get("require_all", True),
+        )
+    if kind in ("vol_gate", "trend_gate"):
+        from forex.strategies.regimes import TrendGate, VolGate
+
+        gate_cls = VolGate if kind == "vol_gate" else TrendGate
+        return gate_cls(build_signal(spec["member"]), **spec.get("params", {}))
     if kind in XS_SIGNALS:
         return XS_SIGNALS[kind](**spec.get("params", {}))
     raise KeyError(
-        f"unknown signal type {kind!r}; known: {sorted(XS_SIGNALS) + ['xs_ensemble']}"
+        f"unknown signal type {kind!r}; known: "
+        f"{sorted(XS_SIGNALS) + ['xs_ensemble', 'vol_gate', 'trend_gate']}"
     )

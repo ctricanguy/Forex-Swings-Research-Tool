@@ -105,9 +105,18 @@ class XSEnsemble(CrossSectionalSignal):
 
     Each member's scores are z-scored *across pairs per bar* (so a rate
     differential in percent and a trailing return in decimals become
-    comparable), then combined as a weighted average. NaNs propagate: a pair
-    only gets an ensemble score on bars where every member can score it, which
-    keeps the combination honest during warm-up.
+    comparable), then combined as a weighted average.
+
+    NaN handling is the ``require_all`` switch:
+
+    * ``require_all=True`` (default): NaNs propagate -- a pair only gets an
+      ensemble score on bars where every member can score it. Honest during
+      warm-up, strict.
+    * ``require_all=False``: a NaN member simply *abstains* and the remaining
+      members are re-weighted (weighted mean over available scores). This is
+      the right semantics for regime-gated members (a gated-off factor should
+      hand its vote to the others, not silence the pair). When every member is
+      present the two modes agree exactly.
     """
 
     def __init__(
@@ -115,6 +124,7 @@ class XSEnsemble(CrossSectionalSignal):
         signals: Sequence[CrossSectionalSignal],
         weights: Optional[Sequence[float]] = None,
         name: str = "xs_ensemble",
+        require_all: bool = True,
     ) -> None:
         if not signals:
             raise ValueError("XSEnsemble needs at least one signal")
@@ -124,13 +134,23 @@ class XSEnsemble(CrossSectionalSignal):
         w = np.ones(len(signals)) if weights is None else np.asarray(weights, float)
         self.weights = w / w.sum()
         self.name = name
+        self.require_all = require_all
 
     def score(self, panel: Panel) -> pd.DataFrame:
         total: Optional[pd.DataFrame] = None
+        available: Optional[pd.DataFrame] = None
         for weight, signal in zip(self.weights, self.signals):
             raw = signal.score(panel)
             mu = raw.mean(axis=1)
             sd = raw.std(axis=1, ddof=1).replace(0.0, np.nan)
             z = raw.sub(mu, axis=0).div(sd, axis=0)
-            total = weight * z if total is None else total + weight * z
-        return total
+            if self.require_all:
+                total = weight * z if total is None else total + weight * z
+            else:
+                contrib = weight * z.fillna(0.0)
+                mass = weight * z.notna().astype(float)
+                total = contrib if total is None else total + contrib
+                available = mass if available is None else available + mass
+        if self.require_all:
+            return total
+        return total.div(available.replace(0.0, np.nan))

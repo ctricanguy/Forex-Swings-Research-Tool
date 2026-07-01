@@ -22,6 +22,7 @@
 | Value factor (PPP / long-horizon reversal) + diversified sleeve | `XSValue`, `XSEnsemble` in `forex/strategies/cross_sectional.py` |
 | Real swap/rollover per pair | rate-differential financing in `forex/backtest/portfolio.py` |
 | Risk management (vol targeting, drawdown kill switch, sizing) | `forex/risk.py` (`RiskOverlay` — itself a `Backtestable`) |
+| Regime conditioning (vol stress gate for carry, trend-strength gate for momentum) | `forex/strategies/regimes.py` (`VolGate`, `TrendGate`) |
 | Real interest-rate data (FRED, keyless) | `forex/data/rates.py` |
 | Config-driven deployment | `forex/strategies/registry.py` + `forex/config.py` |
 | Auditable track record | `forex/tracking.py` + `signals`/`outcomes`/`books` tables |

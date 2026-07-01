@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """Full validation suite on REAL OANDA data. Run this on your own machine.
 
-Pulls ~10 years of daily candles for an 8-pair universe, attaches real FRED
-rate differentials (keyless), and runs every factor sleeve through walk-forward
-+ holdout + deflated Sharpe -- plus a risk-overlaid ensemble, i.e. the sleeve as
-it would actually be deployed. Archives the report under docs/validation/ so
-the pre-live evidence is preserved (see docs/SERVICE.md).
+Pulls ~10 years of daily candles for a 16-pair universe (majors + liquid
+crosses -- cross-sectional factors need breadth), attaches real FRED rate
+differentials, and runs every factor sleeve through walk-forward + holdout +
+deflated Sharpe -- including regime-gated variants (vol-gated carry,
+trend-gated momentum) and the risk-overlaid deployed configuration. Archives
+the report under docs/validation/ so the pre-live evidence is preserved.
 
     export OANDA_ACCESS_TOKEN=...      # practice token is fine
     python scripts/validate_real.py
 
 Costs are modelled at the full quoted bid/ask spread (conservative).
+
+HONESTY NOTE: every sleeve in this report is one more trial against the same
+data. Per-sleeve deflated Sharpe accounts for its own parameter grid, not for
+sleeve-shopping across the report -- so if you pick the best-looking section,
+apply extra skepticism, and prefer the sleeve that was the *prior* hypothesis
+(the diversified ensemble) over whatever happens to shine.
 """
 
 from __future__ import annotations
@@ -19,7 +26,7 @@ import argparse
 import os
 import sys
 from collections import Counter
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -38,16 +45,27 @@ from forex.data.oanda import OandaDataProvider
 from forex.risk import risk_overlay_factory
 from forex.strategies import (
     TimeSeriesMomentum,
+    TrendGate,
+    VolGate,
     XSCarry,
     XSEnsemble,
     XSMomentum,
     XSValue,
 )
 
+# Majors + liquid crosses. Cross-sectional ranking with 16 names has real
+# granularity; with 8 it starves. All currencies are covered by the FRED map.
 UNIVERSE = [
     "EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD",
     "USD_CAD", "NZD_USD", "USD_CHF", "EUR_GBP",
+    "EUR_JPY", "GBP_JPY", "AUD_JPY", "CAD_JPY",
+    "EUR_CHF", "EUR_AUD", "GBP_CHF", "NZD_JPY",
 ]
+
+# Cost-aware momentum lookbacks: the 20-bar config churns too much to survive
+# the spread (the first real-data run picked it in-sample and lost OOS).
+MOMENTUM_GRID = {"lookback": [60, 120, 250]}
+VALUE_GRID = {"lookback": [750, 1000, 1250]}
 
 
 def run_sleeve(title, factory, configs, train, test):
@@ -58,7 +76,8 @@ def run_sleeve(title, factory, configs, train, test):
         picked = Counter(
             tuple(sorted(f.best_config.items())) for f in wf.folds
         ).most_common(1)[0][0]
-        lines.append(f"most-picked OOS config: {dict(picked)}")
+        if picked:
+            lines.append(f"most-picked OOS config: {dict(picked)}")
         holdout = holdout_split(factory(dict(picked)), in_sample=0.7)
     lines += ["", "```", validation_report(wf, holdout), "```", ""]
     return "\n".join(lines)
@@ -88,20 +107,21 @@ def main() -> None:
     try:
         from forex.data.rates import FredRates
 
-        print("Attaching FRED rate differentials ...")
-        frames = FredRates().attach(frames)
+        print("Attaching FRED rate differentials (patient fetch, retries) ...")
+        rates = FredRates(start="2014-01-01", timeout=120, retries=4)
+        frames = rates.attach(frames)
         have_rates = True
     except Exception as exc:  # noqa: BLE001 - report and continue price-only
-        print(f"WARNING: FRED rates unavailable ({exc}); carry/ensemble skipped.")
+        print(f"WARNING: FRED rates unavailable ({exc}); carry/ensemble limited.")
 
     panel = Panel(frames)
     costs = CostModel(spread_fill=1.0)  # full quoted spread, conservative
     train, test = args.train, args.test
 
     sections = [
-        f"# Real-data validation — {date.today():%Y-%m-%d}",
+        f"# Real-data validation — {datetime.now():%Y-%m-%d %H:%M}",
         "",
-        f"Universe: {', '.join(UNIVERSE)}  |  daily bars: ~{args.bars}  |  "
+        f"Universe: {len(UNIVERSE)} pairs  |  daily bars: ~{args.bars}  |  "
         f"walk-forward train/test: {train}/{test} bars  |  costs: full quoted spread"
         + ("  |  FRED rates attached" if have_rates else "  |  NO rates (price-only)"),
         "",
@@ -110,45 +130,74 @@ def main() -> None:
     def pf(cls, **construction):
         return portfolio_factory(cls, panel, costs, "D", quantile=1 / 3, **construction)
 
-    sections.append(run_sleeve(
-        "Cross-sectional momentum", pf(XSMomentum),
-        expand_grid({"lookback": [20, 40, 60, 120, 250]}), train, test,
+    sleeves = []
+
+    sleeves.append((
+        "Cross-sectional momentum", pf(XSMomentum), expand_grid(MOMENTUM_GRID),
     ))
-    sections.append(run_sleeve(
+
+    def gated_momentum(**config):
+        return TrendGate(XSMomentum(**config))
+
+    sleeves.append((
+        "Cross-sectional momentum, trend-gated (ER)", pf(gated_momentum),
+        expand_grid(MOMENTUM_GRID),
+    ))
+    sleeves.append((
         "Cross-sectional value (long-horizon reversal)", pf(XSValue),
-        expand_grid({"lookback": [750, 1000, 1250]}), train, test,
+        expand_grid(VALUE_GRID),
     ))
+
     if have_rates:
-        sections.append(run_sleeve(
+        sleeves.append((
             "Cross-sectional carry (real rate differentials)", pf(XSCarry),
-            expand_grid({}), train, test,
+            expand_grid({}),
+        ))
+
+        def gated_carry(**_):
+            return VolGate(XSCarry())
+
+        sleeves.append((
+            "Cross-sectional carry, vol-gated (flat when stressed)", pf(gated_carry),
+            expand_grid({}),
         ))
 
         def ensemble_cls(**_):
-            return XSEnsemble([XSMomentum(60), XSCarry(), XSValue(1000)])
+            return XSEnsemble(
+                [TrendGate(XSMomentum(120)), VolGate(XSCarry()), XSValue(1000)],
+                require_all=False,
+            )
 
-        sections.append(run_sleeve(
-            "Diversified sleeve: momentum + carry + value", pf(ensemble_cls),
-            expand_grid({}), train, test,
+        sleeves.append((
+            "Diversified sleeve: gated momentum + gated carry + value",
+            pf(ensemble_cls), expand_grid({}),
         ))
-        sections.append(run_sleeve(
-            "Deployed configuration: sleeve + risk overlay (10% vol target, 15% kill)",
+        sleeves.append((
+            "DEPLOYED CONFIG: sleeve + risk overlay (10% vol target, 15% kill)",
             risk_overlay_factory(
                 pf(ensemble_cls), target_ann_vol=0.10, max_drawdown=0.15
             ),
-            expand_grid({}), train, test,
+            expand_grid({}),
         ))
 
-    sections.append(run_sleeve(
+    sleeves.append((
         "Baseline: per-pair time-series momentum on EUR_USD",
         strategy_factory(TimeSeriesMomentum, frames["EUR_USD"], costs, "D"),
-        expand_grid({"lookback": [60, 120, 250]}), train, test,
+        expand_grid({"lookback": [60, 120, 250]}),
     ))
+
+    sections.append(
+        f"Sleeves evaluated in this report: {len(sleeves)} — per-sleeve deflated "
+        "Sharpe does NOT account for choosing the best sleeve afterwards.\n"
+    )
+    for title, factory, configs in sleeves:
+        print(f"validating: {title} ...")
+        sections.append(run_sleeve(title, factory, configs, train, test))
 
     report = "\n".join(sections)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{date.today():%Y-%m-%d}-real.md"
+    out_path = out_dir / f"{datetime.now():%Y-%m-%d-%H%M}-real.md"
     out_path.write_text(report, encoding="utf-8")
     print(f"\n{report}\n\nReport archived to {out_path}")
 

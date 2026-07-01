@@ -17,6 +17,7 @@ from forex.strategies.cross_sectional import (
 from forex.strategies.ensemble import Ensemble
 from forex.strategies.ma_cross import MovingAverageCross
 from forex.strategies.momentum import TimeSeriesMomentum
+from forex.strategies.regimes import TrendGate, VolGate
 
 __all__ = [
     "Strategy",
@@ -30,4 +31,6 @@ __all__ = [
     "XSEnsemble",
     "XSMomentum",
     "XSValue",
+    "TrendGate",
+    "VolGate",
 ]
