@@ -18,7 +18,9 @@ portfolio engine -- never here.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Optional, Sequence
 
+import numpy as np
 import pandas as pd
 
 from forex.data.panel import Panel
@@ -68,3 +70,67 @@ class XSCarry(CrossSectionalSignal):
                 "panel (interest-rate differential, in percent)."
             )
         return panel.field("rate_diff")
+
+
+class XSValue(CrossSectionalSignal):
+    """Cross-sectional value: long-horizon reversal (cheap = fell the most).
+
+    Asness, Moskowitz & Pedersen (2013) measure currency value as the ~5-year
+    reversal in the *real* exchange rate. With price-only data, the standard
+    practitioner proxy is the negative of the long-horizon nominal return:
+    pairs that fell the most over ``lookback`` bars score highest (cheapest).
+
+    If ``field`` is given (e.g. a real-exchange-rate gap where positive means
+    undervalued), that panel field is used directly instead of the price proxy.
+    Value is deliberately slow-moving and low-turnover -- cost-friendly, and
+    negatively correlated with momentum, which is why the combination works.
+    """
+
+    def __init__(self, lookback: int = 1000, field: Optional[str] = None) -> None:
+        if lookback < 1:
+            raise ValueError("lookback must be >= 1")
+        self.lookback = lookback
+        self.field = field
+        self.name = f"xsvalue_{field or lookback}"
+
+    def score(self, panel: Panel) -> pd.DataFrame:
+        if self.field is not None:
+            return panel.field(self.field)
+        close = panel.close
+        return -(close / close.shift(self.lookback) - 1.0)
+
+
+class XSEnsemble(CrossSectionalSignal):
+    """Diversified multi-factor sleeve, cross-sectional edition.
+
+    Each member's scores are z-scored *across pairs per bar* (so a rate
+    differential in percent and a trailing return in decimals become
+    comparable), then combined as a weighted average. NaNs propagate: a pair
+    only gets an ensemble score on bars where every member can score it, which
+    keeps the combination honest during warm-up.
+    """
+
+    def __init__(
+        self,
+        signals: Sequence[CrossSectionalSignal],
+        weights: Optional[Sequence[float]] = None,
+        name: str = "xs_ensemble",
+    ) -> None:
+        if not signals:
+            raise ValueError("XSEnsemble needs at least one signal")
+        if weights is not None and len(weights) != len(signals):
+            raise ValueError("weights length must match signals length")
+        self.signals = list(signals)
+        w = np.ones(len(signals)) if weights is None else np.asarray(weights, float)
+        self.weights = w / w.sum()
+        self.name = name
+
+    def score(self, panel: Panel) -> pd.DataFrame:
+        total: Optional[pd.DataFrame] = None
+        for weight, signal in zip(self.weights, self.signals):
+            raw = signal.score(panel)
+            mu = raw.mean(axis=1)
+            sd = raw.std(axis=1, ddof=1).replace(0.0, np.nan)
+            z = raw.sub(mu, axis=0).div(sd, axis=0)
+            total = weight * z if total is None else total + weight * z
+        return total

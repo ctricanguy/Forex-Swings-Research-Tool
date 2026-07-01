@@ -21,13 +21,15 @@ auto-trade.
 ```
 forex/
 ├── data/            # canonical bar schema + providers (synthetic, OANDA),
-│                    #   SQLite store, and Panel (multi-pair aligned universe)
+│                    #   SQLite store, Panel (multi-pair universe), FRED rates
 ├── strategies/      # THE SHARED LIBRARY: pure, point-in-time signal logic
-│                    #   (per-pair strategies + cross-sectional factor signals)
+│                    #   (per-pair + cross-sectional factors) + config registry
 ├── backtest/        # honest per-pair engine + cross-sectional PortfolioBacktest,
 │                    #   the Backtestable interface, and the validation harness
 │                    #   (walk-forward, holdout, PSR / deflated Sharpe)
-└── live/            # scheduled runner + notifiers (console, Telegram)
+├── risk.py          # RiskOverlay: vol targeting + max-drawdown kill switch
+├── tracking.py      # signal outcomes -> auditable track record
+└── live/            # scheduled runners (per-pair + portfolio), notifiers, bot
 scripts/             # run_backtest.py, run_live.py
 deploy/              # systemd unit for a Raspberry Pi
 tests/               # parity, cost, storage, and lookahead-bias tests
@@ -113,14 +115,24 @@ tokens never get committed.
 | `XSMomentum` | `forex/strategies/cross_sectional.py` | Rank pairs by trailing return; long top / short bottom. |
 | `XSCarry` | `forex/strategies/cross_sectional.py` | Rank pairs by rate differential (needs `rate_diff`). |
 
+| `XSValue` | `forex/strategies/cross_sectional.py` | Long-horizon reversal (PPP proxy); or a real-value field. |
+| `XSEnsemble` | `forex/strategies/cross_sectional.py` | Diversified sleeve: z-scored, weighted factor average. |
+
 Cross-sectional signals feed `PortfolioBacktest`, which builds a dollar-neutral
-long/short book (`rank_weights`) and is itself a `Backtestable` — so it validates
-through the exact same harness:
+long/short book (`rank_weights`), accrues **real per-pair swap financing** from
+rate differentials, and is itself a `Backtestable` — so it validates through the
+exact same harness. Wrap anything in `RiskOverlay` for vol targeting and a
+max-drawdown kill switch, and it's *still* a `Backtestable`:
 
 ```bash
-python scripts/run_portfolio.py --signal xsmom --train 250 --test 60
+python scripts/run_portfolio.py --signal xsens --vol-target 0.10 --max-drawdown 0.15
 python scripts/run_portfolio.py --signal xscarry
 ```
+
+Real rate differentials come from FRED with **no API key**
+(`forex/data/rates.py`; verify the series map before trusting it). Strategies
+are buildable from config specs (`forex/strategies/registry.py`), so the
+deployed sleeve is a YAML edit — see `config/config.example.yaml`.
 
 Add your own per-pair strategy by subclassing `forex.strategies.base.Strategy`,
 or a cross-sectional one by subclassing
@@ -153,14 +165,34 @@ the kind of discrimination you want before risking anything.
 The base rate you are fighting: regulators report **~74–89%** of retail forex
 accounts lose money. Treat this project as a rigorous learning instrument first.
 
+## Track record & running as a service
+
+Every emitted signal is timestamped at emission and marked to market afterwards
+— never edited retroactively:
+
+```bash
+python scripts/track_record.py --db forex.db   # auditable performance digest
+```
+
+Portfolio mode runs the whole universe as one long/short book
+(`mode: portfolio` in config), emitting a rebalance alert only when the book
+changes. An optional interactive Telegram bot (`forex/live/bot.py`, needs
+`python-telegram-bot`) serves `/status`, `/signals`, `/book`, `/track`.
+
+If you intend to charge for signals, read **`docs/SERVICE.md`** first — it
+covers the service architecture, and the regulatory reality (CTA/FCA rules
+around paid trading advice) that you must clear with a lawyer before taking
+money.
+
 ## Status
 
-Stage 0–3 of the roadmap in `docs/ARCHITECTURE.md`: the modular skeleton, a
-shared strategy library (per-pair **and** cross-sectional), an honest per-pair
-backtester and a cross-sectional `PortfolioBacktest`, SQLite persistence, an
-OANDA provider, a live alert runner, and the **validation harness** (walk-forward,
-holdout, PSR / deflated Sharpe) — all behind the single `Backtestable` interface,
-all tested. Next: the value factor (PPP / real-exchange-rate, needs FRED), a risk
-layer (position sizing + drawdown kill-switch), and wiring real OANDA data.
+All roadmap stages from `docs/ARCHITECTURE.md` are implemented behind the single
+`Backtestable` interface: shared strategy library (per-pair + cross-sectional
+carry/momentum/value + ensembles), honest engines with real per-pair swap
+financing, the validation harness (walk-forward, holdout, deflated Sharpe), the
+risk layer (vol targeting + kill switch), FRED rate ingestion, config-driven
+live runners (pair + portfolio), outcome tracking, and CI. Remaining before real
+money: wire your OANDA token (`scripts/smoke_oanda.py`), verify the FRED series
+map, then paper-trade the sleeve for 3–6 months and compare live vs backtest.
 
 [@BotFather]: https://t.me/BotFather

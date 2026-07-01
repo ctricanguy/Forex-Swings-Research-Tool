@@ -92,6 +92,45 @@ def test_portfolio_window_respects_warmup():
     pd.testing.assert_series_equal(windowed.returns, expected, check_names=False)
 
 
+def _flat_price_frame(rate, n=100):
+    idx = pd.date_range("2024-01-01", periods=n, freq="D", tz="UTC", name="time")
+    return pd.DataFrame(
+        {
+            "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0,
+            "bid": 1.0, "ask": 1.0, "volume": 100.0, "complete": True,
+            "rate_diff": float(rate),
+        },
+        index=idx,
+    )
+
+
+def test_carry_book_earns_rate_financing():
+    """Flat prices + static rate diffs: the long/short book's entire return is
+    financing, and it must be positive and match the hand-computed accrual."""
+    from forex.strategies import XSCarry
+
+    panel = Panel({"AAA_USD": _flat_price_frame(3.0), "BBB_USD": _flat_price_frame(-3.0)})
+    bt = PortfolioBacktest(XSCarry(), panel, quantile=0.5)
+    res = bt.run()
+    # held: +0.5 AAA (earns +3%/yr), -0.5 BBB (earns +3%/yr since rate is -3%).
+    per_bar = (0.5 * 3.0 + 0.5 * 3.0) / 100.0 / 252.0
+    # First bar: no position yet (execution shift). From bar 1 on, the held book
+    # accrues financing at the lagged (static, so defined) rate: n-1 bars.
+    assert res.returns.iloc[0] == 0.0
+    expected = per_bar * (len(res.returns) - 1)
+    assert abs(res.returns.sum() - expected) < 1e-12
+    assert res.metrics["total_return"] > 0
+
+
+def test_financing_disabled_falls_back_to_scalar_swap():
+    from forex.strategies import XSCarry
+
+    panel = Panel({"AAA_USD": _flat_price_frame(3.0), "BBB_USD": _flat_price_frame(-3.0)})
+    bt = PortfolioBacktest(XSCarry(), panel, quantile=0.5, use_rate_financing=False)
+    res = bt.run()
+    assert abs(res.returns.sum()) < 1e-12  # neutral book, scalar swap 0
+
+
 # -- the payoff: same harness, no changes ---------------------------------
 
 def test_portfolio_plugs_into_walk_forward():

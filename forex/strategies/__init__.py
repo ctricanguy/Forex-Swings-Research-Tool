@@ -7,7 +7,13 @@ and runs identically in both contexts.
 
 from forex.strategies.base import Strategy, positions_frame
 from forex.strategies.carry import Carry
-from forex.strategies.cross_sectional import CrossSectionalSignal, XSCarry, XSMomentum
+from forex.strategies.cross_sectional import (
+    CrossSectionalSignal,
+    XSCarry,
+    XSEnsemble,
+    XSMomentum,
+    XSValue,
+)
 from forex.strategies.ensemble import Ensemble
 from forex.strategies.ma_cross import MovingAverageCross
 from forex.strategies.momentum import TimeSeriesMomentum
@@ -21,5 +27,7 @@ __all__ = [
     "TimeSeriesMomentum",
     "CrossSectionalSignal",
     "XSCarry",
+    "XSEnsemble",
     "XSMomentum",
+    "XSValue",
 ]

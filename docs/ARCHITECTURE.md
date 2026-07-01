@@ -19,6 +19,13 @@
 | Deflated / Probabilistic Sharpe Ratio | `forex/backtest/statistics.py` |
 | Cross-sectional factor premia (rank pairs, long/short) | `forex/strategies/cross_sectional.py` (signals) + `forex/backtest/portfolio.py` (`PortfolioBacktest`, `rank_weights`) over a `forex/data/panel.py` universe |
 | Per-pair carry / momentum / trend factors | `forex/strategies/{carry,momentum,ma_cross}.py`, combined in `ensemble.py` |
+| Value factor (PPP / long-horizon reversal) + diversified sleeve | `XSValue`, `XSEnsemble` in `forex/strategies/cross_sectional.py` |
+| Real swap/rollover per pair | rate-differential financing in `forex/backtest/portfolio.py` |
+| Risk management (vol targeting, drawdown kill switch, sizing) | `forex/risk.py` (`RiskOverlay` — itself a `Backtestable`) |
+| Real interest-rate data (FRED, keyless) | `forex/data/rates.py` |
+| Config-driven deployment | `forex/strategies/registry.py` + `forex/config.py` |
+| Auditable track record | `forex/tracking.py` + `signals`/`outcomes`/`books` tables |
+| Service packaging & regulatory caveats | `docs/SERVICE.md` |
 | Point-in-time SQLite persistence | `forex/data/storage.py` |
 | OANDA v20 bid/ask candles | `forex/data/oanda.py` |
 | Telegram alerts + APScheduler on a Pi under systemd | `forex/live/`, `deploy/forex-bot.service` |

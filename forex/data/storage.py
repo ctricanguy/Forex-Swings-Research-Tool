@@ -66,6 +66,15 @@ CREATE TABLE IF NOT EXISTS outcomes (
     notes       TEXT,
     PRIMARY KEY (signal_id)
 );
+
+CREATE TABLE IF NOT EXISTS books (
+    strategy    TEXT    NOT NULL,
+    bar_time    TEXT    NOT NULL,
+    instrument  TEXT    NOT NULL,
+    weight      REAL    NOT NULL,
+    created_at  TEXT    NOT NULL,
+    PRIMARY KEY (strategy, bar_time, instrument)
+);
 """
 
 
@@ -219,6 +228,81 @@ class Storage:
             self._conn,
             params=(limit,),
         )
+
+    def all_signals(self) -> pd.DataFrame:
+        return pd.read_sql_query(
+            "SELECT * FROM signals ORDER BY strategy, instrument, bar_time ASC",
+            self._conn,
+        )
+
+    # -- outcomes -------------------------------------------------------------
+
+    def record_outcome(
+        self,
+        signal_id: int,
+        closed_at: str,
+        exit_price: Optional[float],
+        pnl: Optional[float],
+        notes: str = "",
+    ) -> None:
+        """Upsert the realised outcome of a signal (idempotent re-marking)."""
+        self._conn.execute(
+            """
+            INSERT INTO outcomes (signal_id, closed_at, exit_price, pnl, notes)
+            VALUES (?,?,?,?,?)
+            ON CONFLICT(signal_id) DO UPDATE SET
+                closed_at=excluded.closed_at, exit_price=excluded.exit_price,
+                pnl=excluded.pnl, notes=excluded.notes
+            """,
+            (signal_id, closed_at, exit_price, pnl, notes),
+        )
+        self._conn.commit()
+
+    def outcomes(self) -> pd.DataFrame:
+        """Outcomes joined to their signals, oldest first."""
+        return pd.read_sql_query(
+            """
+            SELECT s.id, s.strategy, s.instrument, s.bar_time, s.direction,
+                   s.entry, o.closed_at, o.exit_price, o.pnl
+            FROM outcomes o JOIN signals s ON s.id = o.signal_id
+            ORDER BY s.bar_time ASC
+            """,
+            self._conn,
+        )
+
+    # -- books (portfolio weights) ---------------------------------------------
+
+    def save_book(self, strategy: str, bar_time: datetime, weights: dict) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with closing(self._conn.cursor()) as cur:
+            for instrument, weight in weights.items():
+                cur.execute(
+                    """
+                    INSERT INTO books (strategy, bar_time, instrument, weight, created_at)
+                    VALUES (?,?,?,?,?)
+                    ON CONFLICT(strategy, bar_time, instrument) DO UPDATE SET
+                        weight=excluded.weight, created_at=excluded.created_at
+                    """,
+                    (strategy, bar_time.isoformat(), instrument, float(weight), now),
+                )
+        self._conn.commit()
+
+    def last_book(self, strategy: str) -> Optional[tuple]:
+        """Latest persisted book as ``(bar_time, {instrument: weight})``."""
+        with closing(self._conn.cursor()) as cur:
+            cur.execute(
+                "SELECT MAX(bar_time) FROM books WHERE strategy=?", (strategy,)
+            )
+            row = cur.fetchone()
+            if row is None or row[0] is None:
+                return None
+            bar_time = row[0]
+            cur.execute(
+                "SELECT instrument, weight FROM books WHERE strategy=? AND bar_time=?",
+                (strategy, bar_time),
+            )
+            weights = {inst: w for inst, w in cur.fetchall()}
+        return datetime.fromisoformat(bar_time), weights
 
 
 def _opt_float(value) -> Optional[float]:

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Run the live signal runner.
+"""Run the live signal runner (config-driven).
 
-By default it does ONE polling cycle and exits (safe to wire to cron). Pass
-``--schedule`` to start the in-process APScheduler loop instead (what the
-systemd service runs).
+The config decides everything: data source, mode (per-pair strategy vs
+cross-sectional portfolio), which strategy/signal spec to build, risk settings,
+and where alerts go. Changing the deployed sleeve is a config edit, not a code
+change.
 
 Examples
 --------
@@ -25,8 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from forex.config import Config
 from forex.data import SyntheticDataProvider
 from forex.data.storage import Storage
-from forex.live import ConsoleNotifier, LiveRunner, TelegramNotifier
-from forex.strategies import TimeSeriesMomentum
+from forex.live import ConsoleNotifier, LiveRunner, PortfolioLiveRunner, TelegramNotifier
+from forex.strategies.registry import build_signal, build_strategy
 
 
 def build_provider(cfg: Config):
@@ -36,13 +37,42 @@ def build_provider(cfg: Config):
         if not cfg.oanda.access_token:
             raise SystemExit("OANDA selected but OANDA_ACCESS_TOKEN is not set.")
         return OandaDataProvider(cfg.oanda.access_token, cfg.oanda.environment)
-    return SyntheticDataProvider()
+    return SyntheticDataProvider(with_rate_diff=(cfg.mode == "portfolio"))
 
 
 def build_notifier(cfg: Config):
     if cfg.telegram.bot_token and cfg.telegram.chat_id:
         return TelegramNotifier(cfg.telegram.bot_token, cfg.telegram.chat_id)
     return ConsoleNotifier()
+
+
+def build_runner(cfg: Config, storage: Storage):
+    provider = build_provider(cfg)
+    notifier = build_notifier(cfg)
+    common = dict(
+        instruments=cfg.instruments,
+        granularity=cfg.granularity,
+        history_bars=cfg.history_bars,
+        notifier=notifier,
+    )
+    if cfg.mode == "portfolio":
+        rates = None
+        if cfg.use_fred_rates:
+            from forex.data.rates import FredRates
+
+            rates = FredRates()
+        return PortfolioLiveRunner(
+            provider,
+            build_signal(cfg.signal),
+            storage,
+            quantile=cfg.quantile,
+            rates=rates,
+            vol_target=cfg.risk.get("target_ann_vol"),
+            vol_window=cfg.risk.get("vol_window", 60),
+            max_leverage=cfg.risk.get("max_leverage", 3.0),
+            **common,
+        )
+    return LiveRunner(provider, build_strategy(cfg.strategy), storage, **common)
 
 
 def main() -> None:
@@ -53,26 +83,17 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = Config.load(args.config)
-    provider = build_provider(cfg)
-    notifier = build_notifier(cfg)
     storage = Storage(cfg.db_path)
-    strategy = TimeSeriesMomentum(lookback=60)
-
-    runner = LiveRunner(
-        provider,
-        strategy,
-        storage,
-        instruments=cfg.instruments,
-        granularity=cfg.granularity,
-        history_bars=cfg.history_bars,
-        notifier=notifier,
-    )
+    runner = build_runner(cfg, storage)
 
     if args.schedule:
-        runner.start()
+        runner.start(cfg.schedule_cron)
     else:
-        emitted = runner.run_once()
-        print(f"\n{len(emitted)} signal(s) emitted this cycle.")
+        result = runner.run_once()
+        if cfg.mode == "portfolio":
+            print("\nrebalance emitted" if result else "\nbook unchanged")
+        else:
+            print(f"\n{len(result)} signal(s) emitted this cycle.")
         storage.close()
 
 

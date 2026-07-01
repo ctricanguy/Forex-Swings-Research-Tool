@@ -23,7 +23,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from forex.backtest import (
     CostModel,
-    PortfolioBacktest,
     expand_grid,
     holdout_split,
     portfolio_factory,
@@ -31,7 +30,8 @@ from forex.backtest import (
     walk_forward,
 )
 from forex.data import Panel, SyntheticDataProvider
-from forex.strategies import XSCarry, XSMomentum
+from forex.risk import risk_overlay_factory
+from forex.strategies import XSCarry, XSEnsemble, XSMomentum, XSValue
 
 UNIVERSE = [
     "EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD",
@@ -41,7 +41,10 @@ UNIVERSE = [
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--signal", default="xsmom", choices=["xsmom", "xscarry"])
+    parser.add_argument(
+        "--signal", default="xsmom",
+        choices=["xsmom", "xscarry", "xsvalue", "xsens"],
+    )
     parser.add_argument("--granularity", default="D")
     parser.add_argument("--bars", type=int, default=1500)
     parser.add_argument("--train", type=int, default=250)
@@ -49,23 +52,40 @@ def main() -> None:
     parser.add_argument("--quantile", type=float, default=1 / 3)
     parser.add_argument("--anchored", action="store_true")
     parser.add_argument("--spread-fill", type=float, default=1.0)
+    parser.add_argument("--vol-target", type=float, default=None,
+                        help="risk overlay: annualised vol target, e.g. 0.10")
+    parser.add_argument("--max-drawdown", type=float, default=None,
+                        help="risk overlay: kill-switch threshold, e.g. 0.15")
     args = parser.parse_args()
 
-    needs_rates = args.signal == "xscarry"
+    needs_rates = args.signal in ("xscarry", "xsens")
     provider = SyntheticDataProvider(with_rate_diff=needs_rates)
     panel = Panel.from_provider(provider, UNIVERSE, args.granularity, count=args.bars)
     costs = CostModel(spread_fill=args.spread_fill)
 
     if args.signal == "xsmom":
-        cls = XSMomentum
-        configs = expand_grid({"lookback": [20, 40, 60, 90, 120]})
+        cls, configs = XSMomentum, expand_grid({"lookback": [20, 40, 60, 90, 120]})
+    elif args.signal == "xscarry":
+        cls, configs = XSCarry, expand_grid({})  # no parameters to sweep
+    elif args.signal == "xsvalue":
+        cls, configs = XSValue, expand_grid({"lookback": [250, 500, 750]})
     else:
-        cls = XSCarry
-        configs = expand_grid({})  # carry has no parameters to sweep
+        # Diversified sleeve: momentum + carry + value, equal weight.
+        def cls(**_):
+            return XSEnsemble([XSMomentum(60), XSCarry(), XSValue(500)])
+
+        configs = expand_grid({})
 
     factory = portfolio_factory(
         cls, panel, costs, args.granularity, quantile=args.quantile
     )
+    risk_kwargs = {}
+    if args.vol_target:
+        risk_kwargs["target_ann_vol"] = args.vol_target
+    if args.max_drawdown:
+        risk_kwargs["max_drawdown"] = args.max_drawdown
+    if risk_kwargs:
+        factory = risk_overlay_factory(factory, **risk_kwargs)
 
     # Single full-sample backtest for context.
     full = factory(configs[0]).run()
@@ -84,11 +104,9 @@ def main() -> None:
         picked = Counter(
             tuple(sorted(f.best_config.items())) for f in wf.folds
         ).most_common(1)[0][0]
-        chosen = PortfolioBacktest(
-            cls(**dict(picked)), panel, costs=costs,
-            granularity=args.granularity, quantile=args.quantile,
-        )
-        holdout = holdout_split(chosen, in_sample=0.7)
+        # factory() includes the risk overlay if one was requested, so the
+        # holdout judges the strategy exactly as it would be run.
+        holdout = holdout_split(factory(dict(picked)), in_sample=0.7)
     else:
         holdout = None
 

@@ -89,8 +89,8 @@ class LiveRunner:
             self.notifier.send_signal(signal)
         return signal
 
-    def start(self) -> None:  # pragma: no cover - requires APScheduler + long run
-        """Block and run ``run_once`` on the configured cron schedule."""
+    def start(self, cron: str = "5 0 * * *") -> None:  # pragma: no cover
+        """Block and run ``run_once`` on a cron schedule (requires APScheduler)."""
         try:
             from apscheduler.schedulers.blocking import BlockingScheduler
             from apscheduler.triggers.cron import CronTrigger
@@ -101,6 +101,6 @@ class LiveRunner:
             ) from exc
 
         scheduler = BlockingScheduler(timezone="UTC")
-        scheduler.add_job(self.run_once, CronTrigger.from_crontab("5 0 * * *"))
+        scheduler.add_job(self.run_once, CronTrigger.from_crontab(cron))
         self.notifier.send("Forex live runner started.")
         scheduler.start()

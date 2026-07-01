@@ -7,6 +7,8 @@ instruments:
   - GBP_USD
   - USD_JPY
   - AUD_USD
+  - USD_CAD
+  - NZD_USD
 granularity: D            # OANDA code: D (daily), H4 (4-hour), etc.
 history_bars: 400         # how many completed bars to pull each cycle
 
@@ -19,6 +21,37 @@ schedule_cron: "5 0 * * *"
 
 # Data source: "synthetic" (no keys, for testing) or "oanda" (real data).
 data_source: synthetic
+
+# ---- What to run -----------------------------------------------------------
+# mode: "pair" runs the per-pair strategy below on each instrument;
+#       "portfolio" runs the cross-sectional signal over the whole universe
+#       as one dollar-neutral long/short book.
+mode: portfolio
+
+# Per-pair strategy spec (used when mode: pair).
+strategy:
+  type: tsmom             # tsmom | ma_cross | carry | ensemble
+  params: {lookback: 60}
+
+# Cross-sectional signal spec (used when mode: portfolio).
+signal:
+  type: xs_ensemble       # xsmom | xscarry | xsvalue | xs_ensemble
+  members:
+    - {type: xsmom, params: {lookback: 60}}
+    - {type: xscarry}
+    - {type: xsvalue, params: {lookback: 500}}
+quantile: 0.3333          # long/short the top/bottom third of the ranking
+
+# Risk overlay (empty = disabled). Applied to the live book sizing.
+risk:
+  target_ann_vol: 0.10    # scale exposure toward 10% annualised vol
+  vol_window: 60
+  max_leverage: 3.0
+
+# Attach real interest-rate differentials from FRED before scoring (live).
+# Requires internet; no API key needed. Verify the series map in
+# forex/data/rates.py before trusting it with money.
+use_fred_rates: false
 
 # Secrets here are optional and overridden by env vars; keep them blank in git.
 oanda:

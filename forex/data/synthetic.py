@@ -89,7 +89,11 @@ class SyntheticDataProvider(DataProvider):
     ) -> pd.DataFrame:
         n = count or 500
         delta = _GRANULARITY_DELTA.get(granularity, timedelta(days=1))
-        end_time = end or datetime.now(timezone.utc).replace(microsecond=0)
+        end_time = end or datetime.now(timezone.utc)
+        # Floor to the granularity boundary, as real candle timestamps are --
+        # this also makes separate fetches (different instruments, moments)
+        # align on one timeline, which cross-sectional panels require.
+        end_time = pd.Timestamp(end_time).floor(pd.Timedelta(delta)).to_pydatetime()
         times = pd.DatetimeIndex(
             [end_time - delta * (n - 1 - i) for i in range(n)], name="time"
         )

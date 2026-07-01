@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: pip install pandas numpy PyYAML pytest
+      - name: Run tests
+        run: pytest -q
+      - name: Smoke the demo scripts (offline, synthetic data)
+        run: |
+          python scripts/run_backtest.py --strategy tsmom --check-lookahead
+          python scripts/run_validation.py --strategy tsmom --bars 900 --train 250 --test 60
+          python scripts/run_portfolio.py --signal xsens --bars 900 --train 250 --test 60
+          python scripts/run_live.py --once

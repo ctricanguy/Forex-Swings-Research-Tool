@@ -23,7 +23,7 @@ import pandas as pd
 
 from forex.backtest.engine import BacktestResult, CostModel
 from forex.backtest.evaluation import Backtestable, _reslice
-from forex.backtest.metrics import compute_metrics
+from forex.backtest.metrics import compute_metrics, periods_per_year
 from forex.data.panel import Panel
 from forex.strategies.cross_sectional import CrossSectionalSignal
 
@@ -77,6 +77,7 @@ class PortfolioBacktest(Backtestable):
         granularity: str = "D",
         quantile: float = 1.0 / 3.0,
         gross_leverage: float = 1.0,
+        use_rate_financing: bool = True,
     ) -> None:
         self.signal = signal
         self.panel = panel
@@ -84,6 +85,7 @@ class PortfolioBacktest(Backtestable):
         self.granularity = granularity
         self.quantile = quantile
         self.gross_leverage = gross_leverage
+        self.use_rate_financing = use_rate_financing
         self.name = getattr(signal, "name", "portfolio")
 
     def _spread(self, held: pd.DataFrame) -> pd.DataFrame:
@@ -111,7 +113,18 @@ class PortfolioBacktest(Backtestable):
         turnover = held.diff().abs().fillna(held.abs())
         trade_cost = (turnover * (spread / 2.0)).sum(axis=1)
 
-        swap = held.sum(axis=1) * self.costs.swap_per_bar  # ~0 for a neutral book
+        # Financing: when the panel carries per-pair rate differentials, accrue
+        # real swap per pair -- a long earns (pays) its differential pro-rata per
+        # bar, a short the opposite. The rate is lagged one bar so financing for
+        # the bar t holding uses the rate known at t-1 (point-in-time). This is
+        # what makes a carry book actually *earn* carry in the backtest instead
+        # of being a pure price bet. Falls back to the scalar swap otherwise.
+        if self.use_rate_financing and panel.has_field("rate_diff"):
+            ppy = periods_per_year(self.granularity)
+            rate = panel.field("rate_diff").reindex_like(held).shift(1)
+            swap = (held * rate.fillna(0.0) / 100.0 / ppy).sum(axis=1)
+        else:
+            swap = held.sum(axis=1) * self.costs.swap_per_bar  # ~0 for a neutral book
 
         net = gross - trade_cost + swap
         equity = (1.0 + net).cumprod()
