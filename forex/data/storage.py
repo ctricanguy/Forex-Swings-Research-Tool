@@ -75,6 +75,14 @@ CREATE TABLE IF NOT EXISTS books (
     created_at  TEXT    NOT NULL,
     PRIMARY KEY (strategy, bar_time, instrument)
 );
+
+CREATE TABLE IF NOT EXISTS positioning (
+    instrument  TEXT    NOT NULL,
+    time        TEXT    NOT NULL,
+    long_pct    REAL    NOT NULL,
+    short_pct   REAL    NOT NULL,
+    PRIMARY KEY (instrument, time)
+);
 """
 
 
@@ -286,6 +294,41 @@ class Storage:
                     (strategy, bar_time.isoformat(), instrument, float(weight), now),
                 )
         self._conn.commit()
+
+    # -- positioning snapshots ---------------------------------------------------
+
+    def save_positioning(
+        self, instrument: str, time: datetime, long_pct: float, short_pct: float
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO positioning (instrument, time, long_pct, short_pct)
+            VALUES (?,?,?,?)
+            ON CONFLICT(instrument, time) DO UPDATE SET
+                long_pct=excluded.long_pct, short_pct=excluded.short_pct
+            """,
+            (instrument, pd.Timestamp(time).isoformat(), float(long_pct), float(short_pct)),
+        )
+        self._conn.commit()
+
+    def has_positioning(self, instrument: str, time: datetime) -> bool:
+        cur = self._conn.execute(
+            "SELECT 1 FROM positioning WHERE instrument=? AND time=?",
+            (instrument, pd.Timestamp(time).isoformat()),
+        )
+        return cur.fetchone() is not None
+
+    def load_positioning(self, instrument: str) -> pd.Series:
+        """Long-percentage series (0-100) for an instrument, oldest first."""
+        df = pd.read_sql_query(
+            "SELECT time, long_pct FROM positioning WHERE instrument=? ORDER BY time ASC",
+            self._conn,
+            params=(instrument,),
+        )
+        if df.empty:
+            return pd.Series(dtype=float, index=pd.DatetimeIndex([], tz="UTC", name="time"))
+        idx = pd.DatetimeIndex(pd.to_datetime(df["time"], utc=True), name="time")
+        return pd.Series(df["long_pct"].astype(float).values, index=idx)
 
     def last_book(self, strategy: str) -> Optional[tuple]:
         """Latest persisted book as ``(bar_time, {instrument: weight})``."""

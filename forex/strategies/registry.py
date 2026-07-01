@@ -22,6 +22,7 @@ from forex.strategies.cross_sectional import (
     XSCarry,
     XSEnsemble,
     XSMomentum,
+    XSPositioning,
     XSValue,
 )
 from forex.strategies.ensemble import Ensemble
@@ -38,6 +39,7 @@ XS_SIGNALS = {
     "xsmom": XSMomentum,
     "xscarry": XSCarry,
     "xsvalue": XSValue,
+    "xspos": XSPositioning,
 }
 
 

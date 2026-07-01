@@ -72,6 +72,32 @@ class XSCarry(CrossSectionalSignal):
         return panel.field("rate_diff")
 
 
+class XSPositioning(CrossSectionalSignal):
+    """Contrarian retail-positioning signal.
+
+    Uses the ``net_long_pct`` field (0-100, % of OANDA retail clients long,
+    attached by :func:`forex.data.positioning.attach_positioning`). The
+    practitioner convention is contrarian: score = 50 - long%, so a pair whose
+    crowd is 75% long scores -25 (rank low -> short the crowd), a pair 30% long
+    scores +20 (rank high -> long against the crowd).
+
+    Honest caveat: the academic evidence for positioning-based sentiment is
+    weak; this exists to be *tested* through the harness as an information
+    source orthogonal to price, not because it is a documented premium.
+    """
+
+    name = "xspos"
+
+    def score(self, panel: Panel) -> pd.DataFrame:
+        if not panel.has_field("net_long_pct"):
+            raise ValueError(
+                "XSPositioning requires a 'net_long_pct' field; attach it with "
+                "forex.data.positioning.attach_positioning after running "
+                "scripts/fetch_positioning.py."
+            )
+        return 50.0 - panel.field("net_long_pct")
+
+
 class XSValue(CrossSectionalSignal):
     """Cross-sectional value: long-horizon reversal (cheap = fell the most).
 

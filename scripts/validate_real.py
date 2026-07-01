@@ -31,6 +31,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pandas as pd
+
 from forex.backtest import (
     CostModel,
     expand_grid,
@@ -42,14 +44,17 @@ from forex.backtest import (
 )
 from forex.data import Panel
 from forex.data.oanda import OandaDataProvider
+from forex.data.storage import Storage
 from forex.risk import risk_overlay_factory
 from forex.strategies import (
+    EventGate,
     TimeSeriesMomentum,
     TrendGate,
     VolGate,
     XSCarry,
     XSEnsemble,
     XSMomentum,
+    XSPositioning,
     XSValue,
 )
 
@@ -89,6 +94,8 @@ def main() -> None:
     parser.add_argument("--train", type=int, default=750, help="~3y train window")
     parser.add_argument("--test", type=int, default=125, help="~6mo test window")
     parser.add_argument("--out", default="docs/validation")
+    parser.add_argument("--db", default="forex.db",
+                        help="SQLite db holding positioning snapshots (fetch_positioning.py)")
     args = parser.parse_args()
 
     token = os.getenv("OANDA_ACCESS_TOKEN")
@@ -143,10 +150,58 @@ def main() -> None:
         "Cross-sectional momentum, trend-gated (ER)", pf(gated_momentum),
         expand_grid(MOMENTUM_GRID),
     ))
+    # Value on both universes: round two showed value's edge did not survive
+    # widening 8 -> 16 pairs, so universe-robustness is now a standing check.
+    majors = UNIVERSE[:8]
+    majors_panel = Panel({k: v for k, v in frames.items() if k in majors})
     sleeves.append((
-        "Cross-sectional value (long-horizon reversal)", pf(XSValue),
+        "Cross-sectional value (16 pairs)", pf(XSValue), expand_grid(VALUE_GRID),
+    ))
+    sleeves.append((
+        "Cross-sectional value (8 majors only — robustness check)",
+        portfolio_factory(XSValue, majors_panel, costs, "D", quantile=1 / 3),
         expand_grid(VALUE_GRID),
     ))
+
+    # Retail-positioning contrarian sleeve, if snapshots have been fetched
+    # (scripts/fetch_positioning.py). Validated only on actual coverage.
+    try:
+        from forex.data.positioning import attach_positioning
+
+        with Storage(args.db) as storage:
+            pos_frames = attach_positioning(storage, frames)
+        coverage = pd.DataFrame(
+            {k: v["net_long_pct"].notna() for k, v in pos_frames.items()}
+        )
+        enough = coverage.sum(axis=1) >= max(8, len(UNIVERSE) // 2)
+        covered_bars = int(enough.sum())
+        if covered_bars >= train + test:
+            start_ts = enough[enough].index[0]
+            pos_panel = Panel(
+                {k: v[v.index >= start_ts] for k, v in pos_frames.items()}
+            )
+            sections.append(
+                f"Positioning coverage: {covered_bars} bars from {start_ts:%Y-%m-%d}.\n"
+            )
+            sleeves.append((
+                "Retail positioning, contrarian (OANDA position book)",
+                portfolio_factory(XSPositioning, pos_panel, costs, "D", quantile=1 / 3),
+                expand_grid({}),
+            ))
+        else:
+            print(f"positioning: only {covered_bars} covered bars -- sleeve skipped "
+                  "(run scripts/fetch_positioning.py)")
+    except Exception as exc:  # noqa: BLE001
+        print(f"positioning unavailable ({exc}); sleeve skipped")
+
+    # Scheduled-event calendar, if fetched (scripts/fetch_events.py).
+    event_dates = None
+    events_dir = Path("data/events")
+    if events_dir.is_dir() and any(events_dir.glob("*.csv")):
+        from forex.data.events import load_event_dates
+
+        event_dates = load_event_dates(events_dir)
+        print(f"event calendar: {len(event_dates)} dates loaded from {events_dir}")
 
     if have_rates:
         sleeves.append((
@@ -161,6 +216,16 @@ def main() -> None:
             "Cross-sectional carry, vol-gated (flat when stressed)", pf(gated_carry),
             expand_grid({}),
         ))
+
+        if event_dates is not None:
+
+            def event_carry(**_):
+                return EventGate(VolGate(XSCarry()), event_dates, before=1, after=1)
+
+            sleeves.append((
+                "Carry, vol-gated + event-avoiding (flat around CPI/NFP/FOMC)",
+                pf(event_carry), expand_grid({}),
+            ))
 
         def ensemble_cls(**_):
             return XSEnsemble(

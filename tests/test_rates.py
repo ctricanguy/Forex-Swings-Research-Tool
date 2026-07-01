@@ -12,6 +12,11 @@ def fake_fetch(series_id: str) -> str:
     return FAKE_CSV[series_id]
 
 
+def _rates(**kw):
+    # cache_dir=None: unit tests must not touch the on-disk rates cache.
+    return FredRates(fetch=fake_fetch, cache_dir=None, **kw)
+
+
 def test_parse_skips_missing_values():
     s = parse_fredgraph_csv(FAKE_CSV["DFF"])
     assert len(s) == 2  # the "." row dropped
@@ -20,7 +25,7 @@ def test_parse_skips_missing_values():
 
 
 def test_rate_diff_alignment_and_lag():
-    rates = FredRates(fetch=fake_fetch, lag_bars=1)
+    rates = _rates(lag_bars=1)
     idx = pd.date_range("2024-01-02", periods=4, freq="D", tz="UTC", name="time")
     diff = rates.rate_diff("EUR_USD", idx)
     # Unlagged ffilled diff on 01-03 would be 3.75 - 5.33 = -1.58; with lag 1
@@ -31,7 +36,7 @@ def test_rate_diff_alignment_and_lag():
 
 
 def test_attach_adds_rate_diff_column():
-    rates = FredRates(fetch=fake_fetch)
+    rates = _rates()
     idx = pd.date_range("2024-01-02", periods=3, freq="D", tz="UTC", name="time")
     df = pd.DataFrame(
         {
@@ -47,7 +52,7 @@ def test_attach_adds_rate_diff_column():
 
 
 def test_unknown_currency_raises():
-    rates = FredRates(fetch=fake_fetch)
+    rates = _rates()
     try:
         rates.rate("XXX")
         assert False, "expected KeyError"
@@ -62,7 +67,7 @@ def test_caching_fetches_once():
         calls.append(series_id)
         return FAKE_CSV[series_id]
 
-    rates = FredRates(fetch=counting_fetch)
+    rates = FredRates(fetch=counting_fetch, cache_dir=None)
     rates.rate("USD")
     rates.rate("USD")
     assert calls == ["DFF"]

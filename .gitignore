@@ -10,6 +10,8 @@ config/config.yaml
 *.sqlite3
 data/*.parquet
 data/*.csv
+data/rates_cache/
+data/events/
 
 # Python
 __pycache__/

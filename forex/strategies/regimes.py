@@ -100,6 +100,53 @@ class VolGate(CrossSectionalSignal):
         return gated
 
 
+class EventGate(CrossSectionalSignal):
+    """Gate a signal around *scheduled* macro events (FOMC, CPI, NFP, ...).
+
+    The "information circulating" regime: macro announcements account for
+    roughly a third of FX price variation, and event windows are when carry
+    books get hurt and spreads blow out. Because these events are scheduled
+    and published far in advance, gating on the calendar is point-in-time
+    legitimate -- at bar t you genuinely know whether tomorrow is an FOMC day.
+
+    ``mode="avoid"``: abstain during event windows (protective -- e.g. take the
+    carry book to cash around FOMC). ``mode="only"``: active exclusively inside
+    windows (event-conditioned strategies). Windows are calendar days:
+    ``[event - before, event + after]``.
+    """
+
+    def __init__(
+        self,
+        signal: CrossSectionalSignal,
+        event_dates,
+        before: int = 1,
+        after: int = 1,
+        mode: str = "avoid",
+    ) -> None:
+        if mode not in ("avoid", "only"):
+            raise ValueError("mode must be 'avoid' or 'only'")
+        self.signal = signal
+        self.event_dates = pd.DatetimeIndex(pd.to_datetime(list(event_dates), utc=True))
+        self.before = before
+        self.after = after
+        self.mode = mode
+        self.name = f"eventgate[{signal.name}]"
+        blocked = set()
+        for event in self.event_dates.normalize():
+            for offset in range(-before, after + 1):
+                blocked.add(event + pd.Timedelta(days=offset))
+        self._blocked = blocked
+
+    def score(self, panel: Panel) -> pd.DataFrame:
+        scores = self.signal.score(panel)
+        days = panel.index.tz_convert("UTC").normalize()
+        in_window = pd.Series([d in self._blocked for d in days], index=panel.index)
+        active = ~in_window if self.mode == "avoid" else in_window
+        gated = scores.copy()
+        gated.loc[~active] = np.nan
+        return gated
+
+
 class TrendGate(CrossSectionalSignal):
     """Activate a signal per pair only where the pair is trending (or choppy).
 
