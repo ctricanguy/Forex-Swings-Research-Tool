@@ -1,14 +1,13 @@
-# Core runtime dependencies (needed to run backtests and the live runner).
+# Core runtime dependencies (backtests, validation, live runner).
 pandas>=2.0
 numpy>=1.24
 PyYAML>=6.0
 
-# Live data + scheduling. Required only for live OANDA polling, not for
-# synthetic backtests or the test suite.
-oandapyV20>=0.7.2
+# Only needed for the long-running scheduled live loop (`--schedule`).
 APScheduler>=3.10
 
-# Telegram alerts use the standard library (urllib) by default, so no extra
-# dependency is required for one-way push alerts. Uncomment to build an
-# interactive command bot (/status, /signals, /backtest):
+# NOTE: OANDA needs NO SDK -- forex/data/oanda.py speaks the v20 REST API with
+# the standard library (the old oandapyV20 package fails to build on modern
+# setuptools, including Raspberry Pi OS). FRED rates and Telegram one-way
+# alerts are stdlib too. Optional interactive command bot:
 # python-telegram-bot>=21.0

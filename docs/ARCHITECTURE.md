@@ -81,6 +81,12 @@ This guarantees backtest/live parity. The rule that prevents lookahead: **only a
 
 **Data ingestion layer.** Fetch OHLC bars on a schedule, store point-in-time, never overwrite history. For a swing system on daily/4h bars, OANDA's v20 REST API via the mature `oandapyV20` Python wrapper is the natural fit: free API access on demo and live accounts (no separate data subscription), an `InstrumentsCandlesFactory` that auto-paginates around the 5,000-candle-per-request limit, and bid/ask/mid candles (`price=BA` gives you the spread directly, which you need for cost modeling). Caveat from OANDA's own docs: the candle endpoint returns base-pricing candles that can differ slightly from your live execution feed, and OANDA does not publish an unlimited tick archive via the API. For long macro history (rates, CPI for value/PPP work), add FRED (free).
 
+> Implementation note: this repo does **not** use the ``oandapyV20`` SDK -- its
+> setup.py no longer builds under modern setuptools (Raspberry Pi OS included).
+> ``forex/data/oanda.py`` speaks the v20 REST API directly with the standard
+> library (auth header + JSON + pagination), with an injectable HTTP layer so
+> the provider is fully tested offline.
+
 **Persistence.** SQLite is the right default for a Pi: zero-config, single-file, ships with Python, and handles this data volume trivially. Use one table for bars (instrument, granularity, timestamp, o/h/l/c, bid/ask, volume, complete), one for emitted signals (timestamp, instrument, direction, entry, SL, TP, strategy, rationale), and one for tracked outcomes. Flat Parquet files are a fine complement for bulk historical research data that vectorbt reads. Avoid heavier DBs (Postgres) — unnecessary overhead on a Pi.
 
 **Strategy/signal layer.** Keep indicator computation deterministic and vectorized with pandas. For indicators, prefer **`pandas-ta`** (pure Python/pandas, `pip`-installable) over **`TA-Lib`** on a Pi — TA-Lib requires compiling an underlying C library and notoriously fails to build on ARM (`error: command 'arm-linux-gnueabihf-gcc' failed`), though recent TA-Lib wheels (0.6.5+) bundling the C library and a 64-bit OS reduce this pain. On 64-bit Raspberry Pi OS (ARMv8), most scientific wheels resolve from piwheels.

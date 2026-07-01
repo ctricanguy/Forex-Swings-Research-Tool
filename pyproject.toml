@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-live = ["oandapyV20>=0.7.2", "APScheduler>=3.10"]
+live = ["APScheduler>=3.10"]
 dev = ["pytest>=7.0"]
 
 [tool.setuptools]

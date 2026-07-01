@@ -74,6 +74,9 @@ pytest
 
 ## Going live with OANDA + Telegram
 
+No broker SDK is required — the OANDA provider speaks v20 REST with the
+standard library.
+
 1. Create an OANDA practice (demo) account and an API token.
 2. Create a Telegram bot via [@BotFather] and find your chat id.
 3. Configure:
@@ -82,12 +85,18 @@ pytest
    cp config/config.example.yaml config/config.yaml
    # set data_source: oanda in config.yaml
    ```
-4. Dry run one cycle, then start the scheduler:
+4. Verify the wiring, then validate on real data **before** anything else:
+   ```bash
+   python scripts/smoke_oanda.py       # data flows, schema holds
+   python scripts/telegram_test.py     # heartbeat reaches your phone
+   python scripts/validate_real.py     # ~10y real-data validation, archived report
+   ```
+5. Dry run one cycle, then start the scheduler:
    ```bash
    python scripts/run_live.py --once --config config/config.yaml
    python scripts/run_live.py --schedule --config config/config.yaml
    ```
-5. On a Raspberry Pi, run it under systemd (auto-restart, starts on boot):
+6. On a Raspberry Pi, run it under systemd (auto-restart, starts on boot):
    ```bash
    sudo cp deploy/forex-bot.service /etc/systemd/system/
    sudo systemctl enable --now forex-bot

@@ -1,6 +1,6 @@
 -r requirements.txt
 
-# Test suite.
+# Test suite (runs fully offline -- OANDA/FRED/Telegram HTTP layers are mocked).
 pytest>=7.0
 
 # Research / validation extras (heavy; install as needed). On a Raspberry Pi,
