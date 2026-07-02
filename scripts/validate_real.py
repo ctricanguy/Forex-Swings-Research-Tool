@@ -122,7 +122,15 @@ def main() -> None:
                              "see walk_forward docstring)")
     parser.add_argument("--prior-trials", type=int, default=23,
                         help="configs already burned against this data in previous rounds "
-                             "(round 1: 11, round 2: 12); added to the project-wide deflation")
+                             "(round 1: 11, round 2: 12); added to the project-wide deflation. "
+                             "NOTE: when RE-running configs from a previous round (regression "
+                             "runs), count only the OTHER rounds here -- re-evaluating the same "
+                             "configs is not new trials.")
+    parser.add_argument("--price-only", action="store_true",
+                        help="skip FRED rates, positioning, and event calendars entirely -- "
+                             "price-only sleeves. For regression runs of the harness itself.")
+    parser.add_argument("--no-value-robustness", action="store_true",
+                        help="skip the extra 8-major value sleeve (exact round-2 sleeve parity)")
     args = parser.parse_args()
 
     token = os.getenv("OANDA_ACCESS_TOKEN")
@@ -138,26 +146,32 @@ def main() -> None:
         print(f"  {instrument}: {len(df)} bars  {df.index[0]:%Y-%m-%d} .. {df.index[-1]:%Y-%m-%d}")
 
     have_rates = False
-    try:
-        from forex.data.rates import FredRates
+    if args.price_only:
+        print("--price-only: skipping FRED rates (carry/ensemble sleeves excluded).")
+    else:
+        try:
+            from forex.data.rates import FredRates
 
-        print("Attaching FRED rate differentials (patient fetch, retries) ...")
-        rates = FredRates(start="2014-01-01", timeout=120, retries=4)
-        frames = rates.attach(frames)
-        have_rates = True
-    except Exception as exc:  # noqa: BLE001 - report and continue price-only
-        print(f"WARNING: FRED rates unavailable ({exc}); carry/ensemble limited.")
+            print("Attaching FRED rate differentials (patient fetch, retries) ...")
+            rates = FredRates(start="2014-01-01", timeout=120, retries=4)
+            frames = rates.attach(frames)
+            have_rates = True
+        except Exception as exc:  # noqa: BLE001 - report and continue price-only
+            print(f"WARNING: FRED rates unavailable ({exc}); carry/ensemble limited.")
 
     panel = Panel(frames)
     costs = CostModel(spread_fill=1.0)  # full quoted spread, conservative
     train, test = args.train, args.test
 
+    mode = "PRICE-ONLY REGRESSION RUN" if args.price_only else (
+        "FRED rates attached" if have_rates else "NO rates (price-only fallback)"
+    )
     sections = [
         f"# Real-data validation — {datetime.now():%Y-%m-%d %H:%M}",
         "",
         f"Universe: {len(UNIVERSE)} pairs  |  daily bars: ~{args.bars}  |  "
-        f"walk-forward train/test: {train}/{test} bars  |  costs: full quoted spread"
-        + ("  |  FRED rates attached" if have_rates else "  |  NO rates (price-only)"),
+        f"walk-forward train/test: {train}/{test} bars, embargo {args.embargo}  |  "
+        f"costs: full quoted spread  |  {mode}",
         "",
     ]
 
@@ -179,52 +193,56 @@ def main() -> None:
     ))
     # Value on both universes: round two showed value's edge did not survive
     # widening 8 -> 16 pairs, so universe-robustness is now a standing check.
-    majors = UNIVERSE[:8]
-    majors_panel = Panel({k: v for k, v in frames.items() if k in majors})
     sleeves.append((
         "Cross-sectional value (16 pairs)", pf(XSValue), expand_grid(VALUE_GRID),
     ))
-    sleeves.append((
-        "Cross-sectional value (8 majors only — robustness check)",
-        portfolio_factory(XSValue, majors_panel, costs, "D", quantile=1 / 3),
-        expand_grid(VALUE_GRID),
-    ))
+    if not args.no_value_robustness:
+        majors = UNIVERSE[:8]
+        majors_panel = Panel({k: v for k, v in frames.items() if k in majors})
+        sleeves.append((
+            "Cross-sectional value (8 majors only — robustness check)",
+            portfolio_factory(XSValue, majors_panel, costs, "D", quantile=1 / 3),
+            expand_grid(VALUE_GRID),
+        ))
 
     # Retail-positioning contrarian sleeve, if snapshots have been fetched
     # (scripts/fetch_positioning.py). Validated only on actual coverage.
-    try:
-        from forex.data.positioning import attach_positioning
+    # Excluded by --price-only (non-price source; regression runs).
+    if not args.price_only:
+        try:
+            from forex.data.positioning import attach_positioning
 
-        with Storage(args.db) as storage:
-            pos_frames = attach_positioning(storage, frames)
-        coverage = pd.DataFrame(
-            {k: v["net_long_pct"].notna() for k, v in pos_frames.items()}
-        )
-        enough = coverage.sum(axis=1) >= max(8, len(UNIVERSE) // 2)
-        covered_bars = int(enough.sum())
-        if covered_bars >= train + test:
-            start_ts = enough[enough].index[0]
-            pos_panel = Panel(
-                {k: v[v.index >= start_ts] for k, v in pos_frames.items()}
+            with Storage(args.db) as storage:
+                pos_frames = attach_positioning(storage, frames)
+            coverage = pd.DataFrame(
+                {k: v["net_long_pct"].notna() for k, v in pos_frames.items()}
             )
-            sections.append(
-                f"Positioning coverage: {covered_bars} bars from {start_ts:%Y-%m-%d}.\n"
-            )
-            sleeves.append((
-                "Retail positioning, contrarian (OANDA position book)",
-                portfolio_factory(XSPositioning, pos_panel, costs, "D", quantile=1 / 3),
-                expand_grid({}),
-            ))
-        else:
-            print(f"positioning: only {covered_bars} covered bars -- sleeve skipped "
-                  "(run scripts/fetch_positioning.py)")
-    except Exception as exc:  # noqa: BLE001
-        print(f"positioning unavailable ({exc}); sleeve skipped")
+            enough = coverage.sum(axis=1) >= max(8, len(UNIVERSE) // 2)
+            covered_bars = int(enough.sum())
+            if covered_bars >= train + test:
+                start_ts = enough[enough].index[0]
+                pos_panel = Panel(
+                    {k: v[v.index >= start_ts] for k, v in pos_frames.items()}
+                )
+                sections.append(
+                    f"Positioning coverage: {covered_bars} bars from {start_ts:%Y-%m-%d}.\n"
+                )
+                sleeves.append((
+                    "Retail positioning, contrarian (OANDA position book)",
+                    portfolio_factory(XSPositioning, pos_panel, costs, "D", quantile=1 / 3),
+                    expand_grid({}),
+                ))
+            else:
+                print(f"positioning: only {covered_bars} covered bars -- sleeve skipped "
+                      "(run scripts/fetch_positioning.py)")
+        except Exception as exc:  # noqa: BLE001
+            print(f"positioning unavailable ({exc}); sleeve skipped")
 
     # Scheduled-event calendar, if fetched (scripts/fetch_events.py).
+    # Excluded by --price-only (non-price source; regression runs).
     event_dates = None
     events_dir = Path("data/events")
-    if events_dir.is_dir() and any(events_dir.glob("*.csv")):
+    if not args.price_only and events_dir.is_dir() and any(events_dir.glob("*.csv")):
         from forex.data.events import load_event_dates
 
         event_dates = load_event_dates(events_dir)
