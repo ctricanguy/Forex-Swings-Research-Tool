@@ -107,10 +107,15 @@ Ranked by (evidence strength × accessibility):
    promised returns.
 
 **Discipline reminder:** every sleeve above is one more trial against the same
-10 years of data. The per-sleeve deflated Sharpe does not correct for
-sleeve-shopping across rounds — which is why this queue is written down *before*
-the results are known, and why the ensemble (item 3) is the pre-registered
-primary hypothesis, not whatever section looks best afterwards.
+10 years of data. As of validation v5 this is enforced quantitatively: the
+report deflates every sleeve by the **project-wide** trial count (all configs
+of all sleeves, this round plus `--prior-trials` from earlier rounds, with
+pooled trial-Sharpe dispersion), and prints the grid-only per-sleeve DSR
+alongside for comparison. A small train/test embargo (default 5 bars, sized to
+the 1-bar label horizon) purges the walk-forward boundary. The queue is still
+written down *before* the results are known, and the ensemble (item 3) remains
+the pre-registered primary hypothesis, not whatever section looks best
+afterwards.
 
 ## Sources
 

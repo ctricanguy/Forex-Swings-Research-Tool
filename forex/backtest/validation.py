@@ -64,6 +64,28 @@ class WalkForwardResult:
     deflated_sharpe: float
     psr: float
     granularity: str = "D"
+    #: Full-sample per-period Sharpe of every config tried (deflation input);
+    #: exposed so a caller can pool trials ACROSS sleeves and re-deflate.
+    trial_sharpes: List[float] = field(default_factory=list)
+    #: What the current deflated_sharpe accounts for: "per-sleeve" (this grid
+    #: only) or "project-wide" (set by redeflate()).
+    deflation_scope: str = "per-sleeve"
+
+    def redeflate(
+        self, n_trials: int, sr_trials_std: float, scope: str = "project-wide"
+    ) -> None:
+        """Re-deflate against a wider search than this sleeve's own grid.
+
+        Per-sleeve deflation answers "is the best config in this grid luck?".
+        It is too generous when many sleeves are evaluated against the same
+        data: the selection the DSR must guard is the *whole* search. Pass the
+        total trial count and the pooled cross-trial Sharpe dispersion.
+        """
+        self.n_trials = int(n_trials)
+        self.deflated_sharpe = deflated_sharpe_ratio(
+            self.oos_returns, n_trials=self.n_trials, sr_trials_std=sr_trials_std
+        )
+        self.deflation_scope = scope
 
     def summary(self) -> str:
         m = self.metrics
@@ -75,7 +97,7 @@ class WalkForwardResult:
             f"  OOS ann. return  : {m.get('ann_return', 0):+.2%}",
             f"  OOS Sharpe       : {m.get('sharpe', 0):.2f}",
             f"  OOS max drawdown : {m.get('max_drawdown', 0):.2%}",
-            f"  configs tried    : {self.n_trials}",
+            f"  trials deflated  : {self.n_trials} ({self.deflation_scope})",
             f"  PSR (SR>0)       : {self.psr:.3f}",
             f"  Deflated Sharpe  : {self.deflated_sharpe:.3f}",
         ]
@@ -107,6 +129,7 @@ def walk_forward(
     test: int,
     step: Optional[int] = None,
     anchored: bool = False,
+    embargo: int = 0,
     score=sharpe_score,
     granularity: str = "D",
     n_trials: Optional[int] = None,
@@ -126,22 +149,38 @@ def walk_forward(
     anchored:
         If True, the train window always starts at the beginning (expanding);
         otherwise it rolls with a fixed length.
+    embargo:
+        Bars skipped between each ``train_end`` and ``test_start`` (a
+        purge/embargo gap). **Size it to the label/holding horizon, not the
+        feature lookback**: our label is the next-bar return, so a handful of
+        bars is ample padding. Features looking back across the boundary
+        (e.g. a 1000-bar momentum at ``test_start`` reading train-period
+        prices) is NOT leakage in a forward-chaining split -- it is exactly
+        what the deployed strategy does at every live rebalance, and no
+        train-window return observation is reused in test scoring. The gap
+        exists as cheap conservatism and to stay valid if a future strategy
+        introduces multi-bar forward-looking labels.
     n_trials:
-        Trials for the deflation. Defaults to ``len(configs)`` (the breadth of
-        the search), which is the standard practical choice.
+        Trials for the deflation. Defaults to ``len(configs)`` (this sleeve's
+        grid). NOTE: that per-sleeve default is too generous when many sleeves
+        are evaluated against the same data -- pool trials across sleeves and
+        call :meth:`WalkForwardResult.redeflate` (or pass the project-wide
+        count here) for an honest project-level deflation.
     """
     configs = list(configs)
     if not configs:
         raise ValueError("walk_forward needs at least one config")
+    if embargo < 0:
+        raise ValueError("embargo must be >= 0")
     step = step or test
 
     # Reference timeline from a full run of the first config.
     reference = factory(configs[0]).run()
     idx = reference.returns.index
     n = len(idx)
-    if train + test > n:
+    if train + embargo + test > n:
         raise ValueError(
-            f"not enough bars ({n}) for train={train} + test={test}"
+            f"not enough bars ({n}) for train={train} + embargo={embargo} + test={test}"
         )
 
     folds: List[Fold] = []
@@ -150,10 +189,11 @@ def walk_forward(
 
     pos = train
     fold_i = 0
-    while pos + test <= n:
+    while pos + embargo + test <= n:
         train_lo = 0 if anchored else pos - train
         train_start, train_end = idx[train_lo], idx[pos - 1]
-        test_start, test_end = idx[pos], idx[pos + test - 1]
+        test_start = idx[pos + embargo]
+        test_end = idx[pos + embargo + test - 1]
 
         best_score = None
         best_config = configs[0]
@@ -189,6 +229,7 @@ def walk_forward(
 
     # Deflation: dispersion of per-period Sharpes across the full-sample trials.
     trial_returns = [factory(cfg).run().returns for cfg in configs]
+    trial_sharpes = [per_period_sharpe(r) for r in trial_returns]
     sr_std = trial_sharpe_std(trial_returns)
     trials = n_trials if n_trials is not None else len(configs)
     dsr = deflated_sharpe_ratio(oos_returns, n_trials=trials, sr_trials_std=sr_std)
@@ -204,6 +245,8 @@ def walk_forward(
         deflated_sharpe=dsr,
         psr=psr,
         granularity=granularity,
+        trial_sharpes=trial_sharpes,
+        deflation_scope="per-sleeve" if n_trials is None else "caller-specified",
     )
 
 

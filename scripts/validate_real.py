@@ -73,18 +73,38 @@ MOMENTUM_GRID = {"lookback": [60, 120, 250]}
 VALUE_GRID = {"lookback": [750, 1000, 1250]}
 
 
-def run_sleeve(title, factory, configs, train, test):
-    lines = [f"## {title}", ""]
-    wf = walk_forward(factory, configs, train=train, test=test)
+def run_sleeve(title, factory, configs, train, test, embargo):
+    """Run one sleeve; rendering happens later, after project-wide deflation."""
+    wf = walk_forward(factory, configs, train=train, test=test, embargo=embargo)
+    picked_line = None
     holdout = None
     if wf.folds:
         picked = Counter(
             tuple(sorted(f.best_config.items())) for f in wf.folds
         ).most_common(1)[0][0]
         if picked:
-            lines.append(f"most-picked OOS config: {dict(picked)}")
+            picked_line = f"most-picked OOS config: {dict(picked)}"
         holdout = holdout_split(factory(dict(picked)), in_sample=0.7)
-    lines += ["", "```", validation_report(wf, holdout), "```", ""]
+    return {
+        "title": title,
+        "wf": wf,
+        "holdout": holdout,
+        "picked_line": picked_line,
+        # Grid-only deflation, captured before the project-wide re-deflation.
+        "per_sleeve_dsr": wf.deflated_sharpe,
+        "per_sleeve_trials": wf.n_trials,
+    }
+
+
+def render_sleeve(result):
+    lines = [f"## {result['title']}", ""]
+    if result["picked_line"]:
+        lines.append(result["picked_line"])
+    lines.append(
+        f"per-sleeve DSR (grid of {result['per_sleeve_trials']} only, too "
+        f"generous): {result['per_sleeve_dsr']:.3f}"
+    )
+    lines += ["", "```", validation_report(result["wf"], result["holdout"]), "```", ""]
     return "\n".join(lines)
 
 
@@ -96,6 +116,13 @@ def main() -> None:
     parser.add_argument("--out", default="docs/validation")
     parser.add_argument("--db", default="forex.db",
                         help="SQLite db holding positioning snapshots (fetch_positioning.py)")
+    parser.add_argument("--embargo", type=int, default=5,
+                        help="bars purged between train_end and test_start; sized to the "
+                             "1-bar label horizon plus buffer (NOT the feature lookback -- "
+                             "see walk_forward docstring)")
+    parser.add_argument("--prior-trials", type=int, default=23,
+                        help="configs already burned against this data in previous rounds "
+                             "(round 1: 11, round 2: 12); added to the project-wide deflation")
     args = parser.parse_args()
 
     token = os.getenv("OANDA_ACCESS_TOKEN")
@@ -251,13 +278,37 @@ def main() -> None:
         expand_grid({"lookback": [60, 120, 250]}),
     ))
 
-    sections.append(
-        f"Sleeves evaluated in this report: {len(sleeves)} — per-sleeve deflated "
-        "Sharpe does NOT account for choosing the best sleeve afterwards.\n"
-    )
+    # Pass 1: run every sleeve, collecting results and their trial Sharpes.
+    results = []
     for title, factory, configs in sleeves:
         print(f"validating: {title} ...")
-        sections.append(run_sleeve(title, factory, configs, train, test))
+        results.append(run_sleeve(title, factory, configs, train, test, args.embargo))
+
+    # Pass 2: project-wide deflation. The selection the DSR must guard is the
+    # WHOLE search -- every config of every sleeve, this round and previous
+    # rounds -- not each sleeve's grid in isolation.
+    all_sharpes = pd.Series(
+        [s for r in results for s in r["wf"].trial_sharpes]
+    ).dropna()
+    trials_this_report = sum(len(r["wf"].trial_sharpes) for r in results)
+    total_trials = trials_this_report + args.prior_trials
+    pooled_std = float(all_sharpes.std(ddof=1)) if len(all_sharpes) > 1 else float("nan")
+    if pooled_std == pooled_std:  # not NaN
+        for r in results:
+            r["wf"].redeflate(total_trials, pooled_std, scope="project-wide")
+
+    sections.append(
+        f"Deflation: project-wide — {trials_this_report} trials this report "
+        f"+ {args.prior_trials} prior (rounds 1–2) = {total_trials} total; "
+        f"pooled trial-Sharpe dispersion σ = {pooled_std:.4f}. Each section also "
+        "shows its grid-only per-sleeve DSR for comparison; the project-wide "
+        "number is the one verdicts use.\n\n"
+        f"Embargo: {args.embargo} bars purged between every train_end and "
+        "test_start (sized to the 1-bar label horizon + buffer; feature "
+        "lookback needs no embargo in a forward-chaining split).\n"
+    )
+    for r in results:
+        sections.append(render_sleeve(r))
 
     report = "\n".join(sections)
     out_dir = Path(args.out)
